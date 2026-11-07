@@ -1,24 +1,39 @@
 import type { InteractionKind } from '@/lib/types';
-import { hitTestRegion, toRelativePoint } from './regions';
+import { hitTestRegion, type PetRegion, toRelativePoint } from './regions';
 
 export interface PointerStartSnapshot {
   clientX: number;
   clientY: number;
   timestamp: number;
+  part?: PetRegion | null;
 }
 
 export interface GestureResolution {
   kind: InteractionKind;
-  /** 相对于舞台容器的点击/终点坐标 (px)，用于渲染水波纹 */
+  part: PetRegion;
+  /** 相对于舞台容器的点击/终点坐标 (px)，用于渲染水波纹或浮动粒子 */
   x: number;
   y: number;
 }
 
+export function mapRegionToKind(region: PetRegion): InteractionKind {
+  switch (region) {
+    case 'nose':
+      return 'tap_nose';
+    case 'tail':
+      return 'tap_tail';
+    case 'body':
+      return 'stroke';
+    case 'head':
+    default:
+      return 'tap_head';
+  }
+}
+
 /**
- * 根据指针按下与抬起快照判定手势：
- * - tap：位移 < 26px 且时长 <= 600ms -> 命中鼻尖为 tap_nose，命中头部或其余轻点区域为 tap_head
- * - stroke：水平/综合滑动位移 >= 26px -> 触发 stroke（身体抚摸）
- * - 若主要纵向大幅滚动页面（|dy| > |dx| * 1.8 && |dy| > 42），返回 null 交由浏览器滚动
+ * 根据指针按下与抬起快照判定手势（支持 SVG 分层部位直接命中 + 滑动抚摸）：
+ * - 若横向/斜向滑动位移 >= 24px（非纵向页面滚动）：若起点在尾巴则触发 tap_tail，否则触发 stroke（顺毛抚摸背部）
+ * - 若为轻点（位移 < 24px 且时长 <= 650ms）：优先按 SVG 命中的 data-part (head / nose / body / tail) 触发对应动作；未命中 SVG 子部位时按相对坐标兜底
  */
 export function resolvePointerGesture(
   start: PointerStartSnapshot,
@@ -41,26 +56,33 @@ export function resolvePointerGesture(
     Math.max(0, endClientY - containerRect.top)
   );
 
-  // 横向或斜向抚摸滑动（位移 >= 26px）
-  if (distance >= 26) {
+  // 滑动抚摸手势
+  if (distance >= 24) {
     if (Math.abs(dy) > Math.abs(dx) * 1.8 && Math.abs(dy) > 42) {
       return null;
     }
+    if (start.part === 'tail') {
+      return { kind: 'tap_tail', part: 'tail', x, y };
+    }
     return {
       kind: 'stroke',
+      part: 'body',
       x,
       y,
     };
   }
 
   // 轻点手势
-  if (distance < 26 && duration <= 600) {
-    const rel = toRelativePoint(endClientX, endClientY, containerRect);
-    const region = hitTestRegion(rel);
-    if (region === 'nose') {
-      return { kind: 'tap_nose', x, y };
-    }
-    return { kind: 'tap_head', x, y };
+  if (distance < 24 && duration <= 650) {
+    const region: PetRegion =
+      start.part ??
+      hitTestRegion(toRelativePoint(endClientX, endClientY, containerRect));
+    return {
+      kind: mapRegionToKind(region),
+      part: region,
+      x,
+      y,
+    };
   }
 
   return null;

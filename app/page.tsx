@@ -3,11 +3,81 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { PetStage } from '@/components/pet/PetStage';
-import { StatusBar } from '@/components/state/StatusBar';
+import { CozyRoomScene } from '@/components/world/CozyRoomScene';
+import {
+  type SheetMode,
+  WorldDrawerSheet,
+} from '@/components/world/WorldDrawerSheet';
 import { analyzeVideo } from '@/lib/ai/client';
-import { MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } from '@/lib/constants';
+import { avatarOriginLabel } from '@/lib/avatar/profile';
+import {
+  BEHAVIOR_LABELS,
+  MAX_VIDEO_BYTES,
+  PERSONALITY_LABELS,
+  PET_TYPE_LABELS,
+  SOURCE_LABELS,
+} from '@/lib/constants';
 import { getLatestInterval, getPet } from '@/lib/db';
 import { usePetStore } from '@/lib/store';
+import type { Behavior, RealityState } from '@/lib/types';
+
+const NIGHT_PREF_KEY = 'pethome:night-mode';
+
+function getCapsuleTone(
+  behavior: Behavior,
+  syncStatus: RealityState['syncStatus'],
+  status: RealityState['status']
+): { bg: string; fg: string; label: string } {
+  const isFailed =
+    status === 'failed' || status === 'timeout' || status === 'rate_limited';
+  if (isFailed) {
+    return {
+      bg: 'var(--state-failed-bg)',
+      fg: 'var(--state-failed)',
+      label: status === 'rate_limited' ? '请求受限' : '识别异常',
+    };
+  }
+  if (syncStatus === 'offline' && behavior !== 'unknown') {
+    return {
+      bg: 'var(--state-offline-bg)',
+      fg: 'var(--state-offline)',
+      label: `上次 · ${BEHAVIOR_LABELS[behavior]}`,
+    };
+  }
+  switch (behavior) {
+    case 'sleeping':
+      return {
+        bg: 'var(--state-sleeping-bg)',
+        fg: 'var(--state-sleeping)',
+        label: BEHAVIOR_LABELS.sleeping,
+      };
+    case 'walking':
+      return {
+        bg: 'var(--state-walking-bg)',
+        fg: 'var(--state-walking)',
+        label: BEHAVIOR_LABELS.walking,
+      };
+    case 'eating':
+      return {
+        bg: 'var(--state-eating-bg)',
+        fg: 'var(--state-eating)',
+        label: BEHAVIOR_LABELS.eating,
+      };
+    case 'playing':
+      return {
+        bg: 'var(--state-playing-bg)',
+        fg: 'var(--state-playing)',
+        label: BEHAVIOR_LABELS.playing,
+      };
+    case 'unknown':
+    default:
+      return {
+        bg: 'var(--state-unknown-bg)',
+        fg: 'var(--state-unknown)',
+        label: BEHAVIOR_LABELS.unknown,
+      };
+  }
+}
 
 export default function HomePage() {
   const pet = usePetStore((s) => s.pet);
@@ -26,14 +96,25 @@ export default function HomePage() {
   const setVideoName = usePetStore((s) => s.setVideoName);
   const getDisplayAnimation = usePetStore((s) => s.getDisplayAnimation);
 
+  const [nightMode, setNightMode] = useState(false);
+  const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 1. 初始化从 IndexedDB 恢复宠物档案与最近一条行为区间
+  // 1. 初始化恢复本地宠物档案与最近行为区间 + 昼夜光影偏好
   useEffect(() => {
+    try {
+      const savedNight = window.localStorage.getItem(NIGHT_PREF_KEY);
+      if (savedNight === '1') {
+        setNightMode(true);
+      }
+    } catch {
+      // ignore
+    }
+
     let active = true;
     (async () => {
       try {
@@ -61,7 +142,7 @@ export default function HomePage() {
     };
   }, [restore, setError]);
 
-  // 2. 定时推进状态机与清理过期的瞬态触摸覆盖层
+  // 2. 定时推进状态机与清理过期互动覆盖层
   useEffect(() => {
     const timer = window.setInterval(() => {
       tick();
@@ -69,7 +150,7 @@ export default function HomePage() {
     return () => window.clearInterval(timer);
   }, [tick]);
 
-  // 3. 本地视频预览 URL 生命周期管理（原视频仅在浏览器内解码抽帧，绝不整段上传）
+  // 3. 本地视频预览 URL 生命周期管理
   useEffect(() => {
     return () => {
       if (videoPreviewUrl) {
@@ -77,6 +158,18 @@ export default function HomePage() {
       }
     };
   }, [videoPreviewUrl]);
+
+  const toggleNightMode = () => {
+    setNightMode((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(NIGHT_PREF_KEY, next ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
@@ -90,6 +183,7 @@ export default function HomePage() {
       const maxMb = Math.round(MAX_VIDEO_BYTES / (1024 * 1024));
       setError(`视频文件超过 ${maxMb}MB 上限，请选择更短的宠物视频片段`);
       e.target.value = '';
+      setSheetMode('video');
       return;
     }
 
@@ -100,6 +194,7 @@ export default function HomePage() {
     setSelectedFile(file);
     setVideoName(file.name);
     setVideoPreviewUrl(nextUrl);
+    setSheetMode('video');
   };
 
   const handleStartAnalyze = async () => {
@@ -139,165 +234,21 @@ export default function HomePage() {
     }
   };
 
+  const displayAnimation = getDisplayAnimation();
+  const capsuleTone = getCapsuleTone(
+    realityState.behavior,
+    realityState.syncStatus,
+    realityState.status
+  );
   const progressPercent =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.current / progress.total) * 100))
       : 0;
 
-  const displayAnimation = getDisplayAnimation();
-
   return (
-    <div className="page-container">
-      {/* 演示数据全局提示条（当现实状态来源为 preset 时常驻醒目提示） */}
-      {realityState.source === 'preset' && (
-        <div
-          role="status"
-          className="badge-demo-stripe rounded-md px-3.5 py-2.5 text-[13px] font-medium flex items-center justify-between gap-2"
-        >
-          <span>
-            当前展示为【预设演示数据】，非真实摄像头或视频实时识别结果
-          </span>
-        </div>
-      )}
-
-      {/* 尚未建档引导卡（醒目提示用户前往 /create 建立宠物档案） */}
-      {hydrated && !pet && (
-        <section
-          aria-label="创建宠物档案引导"
-          className="card border-brand-200 bg-brand-50/70 flex flex-col gap-3"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-[18px] font-semibold text-ink-900">
-                欢迎来到宠伴 PetHome
-              </h1>
-              <p className="muted-text mt-1">
-                开始上传视频识别或体验完整陪伴前，请先为你的猫咪或狗狗建立专属档案（支持上传真实照片作为数字分身本体）。
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/create" className="btn-primary">
-              立即创建宠物档案
-            </Link>
-            <Link href="/records" className="btn-secondary">
-              查看今日记录
-            </Link>
-          </div>
-        </section>
-      )}
-
-      {/* 1. 数字宠物舞台（照片本体 + CSS 5 态动效 + 3 种手势互动 & 睡觉受限反应） */}
-      <PetStage
-        pet={pet}
-        realityState={realityState}
-        overlay={overlay}
-        displayAnimation={displayAnimation}
-        onSetOverlay={setOverlay}
-      />
-
-      {/* 2. 现实状态卡（三处编码：颜色 + 线性图标 + 文字，条件展示置信度） */}
-      <StatusBar realityState={realityState} />
-
-      {/* 3. 本地视频抽帧与 AI 行为识别控制卡 */}
-      <section
-        aria-label="上传宠物视频识别行为"
-        className="card flex flex-col gap-3.5"
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-[16px] font-semibold text-ink-900">
-              视频抽帧行为识别
-            </h2>
-            <p className="muted-text mt-0.5">
-              支持时长 ≤{MAX_VIDEO_SECONDS} 秒、大小 ≤{Math.round(MAX_VIDEO_BYTES / (1024 * 1024))}MB 的本地宠物视频（每 4 秒抽 1 帧）
-            </p>
-          </div>
-
-          <Link
-            href="/records"
-            className="text-[13px] font-semibold text-brand-600 hover:underline shrink-0 cursor-pointer"
-          >
-            今日记录 →
-          </Link>
-        </div>
-
-        {/* 本地视频预览播放器 */}
-        {videoPreviewUrl && (
-          <div className="rounded-md overflow-hidden border border-line-200 bg-black/5">
-            <video
-              src={videoPreviewUrl}
-              controls
-              playsInline
-              muted
-              className="w-full max-h-[210px] object-contain bg-black"
-            />
-            <div className="px-3 py-1.5 bg-surface-2 flex items-center justify-between text-[12px] text-ink-500">
-              <span className="truncate">
-                已选视频：{selectedFile?.name || videoName || '本地视频'}
-              </span>
-              {selectedFile && (
-                <span className="shrink-0 ml-2">
-                  {(selectedFile.size / (1024 * 1024)).toFixed(1)} MB
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* 识别进度条 */}
-        {busy && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="p-3 rounded-md bg-surface-2 border border-line-200 flex flex-col gap-2"
-          >
-            <div className="flex items-center justify-between text-[13px] font-medium text-ink-700">
-              <span>
-                正在识别视频帧
-                {videoName ? `（${videoName}）` : ''}…
-              </span>
-              <span>
-                {progress.total > 0
-                  ? `${progress.current} / ${progress.total} 帧 (${progressPercent}%)`
-                  : '准备抽帧中…'}
-              </span>
-            </div>
-            <div className="w-full h-2 rounded-pill bg-line-200 overflow-hidden">
-              <div
-                className="h-full transition-all duration-200 rounded-pill"
-                style={{
-                  width: `${Math.max(8, progressPercent)}%`,
-                  backgroundColor: 'var(--brand-500)',
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* 错误反馈横幅 */}
-        {error && (
-          <div
-            role="alert"
-            className="p-3 rounded-md border text-[13px] flex items-start justify-between gap-2"
-            style={{
-              backgroundColor: 'var(--state-failed-bg)',
-              borderColor: '#E8B8B3',
-              color: 'var(--state-failed)',
-            }}
-          >
-            <span>{error}</span>
-            <button
-              type="button"
-              onClick={() => setError(null)}
-              className="text-[12px] underline shrink-0 cursor-pointer"
-            >
-              关闭
-            </button>
-          </div>
-        )}
-
-        {/* 视频选择与开始/取消操作按钮 */}
+    <div className="w-full min-h-[100dvh] sm:py-4 flex items-center justify-center bg-surface-1 overflow-hidden">
+      <div className="w-full max-w-[480px] h-[100dvh] sm:h-auto">
+        {/* 隐藏文件选择器 */}
         <input
           ref={fileInputRef}
           type="file"
@@ -307,72 +258,263 @@ export default function HomePage() {
           aria-label="选择本地宠物视频文件"
         />
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-secondary flex-1 min-w-[130px]"
+        {/* ==================== 100dvh 全屏沉浸数字小屋 ==================== */}
+        <CozyRoomScene nightMode={nightMode}>
+          {/* 1. 上部 18% 留白区 HUD：宠物名字/分身来源 + 现实状态胶囊 + 未建档引导条 */}
+          <div className="relative z-20 flex flex-col gap-2">
+            {realityState.source === 'preset' && (
+              <div
+                role="status"
+                className="badge-demo-stripe rounded-pill px-3 py-1 text-[11px] font-medium text-center"
+              >
+                当前为预设演示数据，非真实视频实时识别结果
+              </div>
+            )}
+
+            <div className="w-full flex items-start justify-between gap-2">
+              {/* 左上：宠物名字与分身标签 */}
+              <div className="inline-flex flex-col px-3 py-1.5 rounded-lg bg-surface-0/90 backdrop-blur-md border border-line-200 shadow-1 min-w-0 max-w-[60%]">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[15px] font-semibold text-ink-900 truncate">
+                    {pet ? pet.name : '通用猫咪分身'}
+                  </span>
+                  {pet ? (
+                    <span className="px-1.5 py-0.5 rounded-pill text-[11px] font-medium bg-brand-50 text-brand-600 whitespace-nowrap shrink-0">
+                      {PET_TYPE_LABELS[pet.type]} ·{' '}
+                      {PERSONALITY_LABELS[pet.personality]}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded-pill text-[11px] font-medium bg-surface-2 text-ink-700 whitespace-nowrap shrink-0">
+                      通用分身
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] text-ink-500 truncate mt-0.5">
+                  {pet
+                    ? avatarOriginLabel(pet.avatar)
+                    : '通用分身 · 创建你的宠物定制外观'}
+                </span>
+              </div>
+
+              {/* 右上：真实识别状态胶囊（点击展开状态详情与说明抽屉） */}
+              <button
+                type="button"
+                onClick={() => setSheetMode('status')}
+                aria-label={`当前现实状态：${capsuleTone.label}，点击查看状态详情`}
+                className="inline-flex flex-col items-end px-3 py-1.5 rounded-lg bg-surface-0/90 backdrop-blur-md border border-line-200 shadow-1 cursor-pointer hover:border-brand-400 transition-colors shrink-0"
+              >
+                <span
+                  className="inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap"
+                  style={{ color: capsuleTone.fg }}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: capsuleTone.fg }}
+                  />
+                  <span>{capsuleTone.label}</span>
+                </span>
+                <span className="text-[10px] text-ink-500 mt-0.5 whitespace-nowrap">
+                  {realityState.source
+                    ? `${SOURCE_LABELS[realityState.source]} · 详情`
+                    : '状态详情'}
+                </span>
+              </button>
+            </div>
+
+            {/* 未建档时的顶部轻巧主 CTA 条（不遮挡下方拱窗与地毯角色） */}
+            {hydrated && !pet && (
+              <div className="px-3 py-2 rounded-lg bg-surface-0/92 backdrop-blur-md border border-brand-200 shadow-1 flex items-center justify-between gap-2">
+                <span className="text-[12px] font-medium text-ink-700 truncate">
+                  通用分身，上传照片创建你的专属宠物
+                </span>
+                <Link
+                  href="/create"
+                  className="btn-primary !py-1 !px-3 !min-h-[32px] !text-[12px] whitespace-nowrap shrink-0"
+                >
+                  创建你的宠物
+                </Link>
+              </div>
+            )}
+
+            {/* 后台抽帧识别实时进度浮条 */}
+            {busy && (
+              <button
+                type="button"
+                onClick={() => setSheetMode('video')}
+                className="w-full px-3 py-1.5 rounded-pill bg-surface-0/95 backdrop-blur-md border border-brand-200 shadow-1 flex items-center justify-between gap-2 text-[12px] text-ink-900 cursor-pointer"
+              >
+                <span className="font-medium truncate">
+                  正在同步视频帧：
+                  {progress.total > 0
+                    ? `${progress.current}/${progress.total} (${progressPercent}%)`
+                    : '准备抽帧…'}
+                </span>
+                <span className="text-brand-600 font-semibold whitespace-nowrap shrink-0">
+                  查看 →
+                </span>
+              </button>
+            )}
+          </div>
+
+          {/* 2. 地毯中央分层 SVG 角色与底部 4 部位互动小 Dock */}
+          <PetStage
+            pet={pet}
+            realityState={realityState}
+            overlay={overlay}
+            displayAnimation={displayAnimation}
+            onSetOverlay={setOverlay}
+          />
+
+          {/* 3. 围绕角色左右两侧布置的 4 个精致圆形主功能按钮（分身 / 视频 / 记录 / 夜灯） */}
+          <div
+            aria-label="小屋左侧快捷操作"
+            className="absolute left-3 bottom-[22%] z-30 pointer-events-auto flex flex-col gap-3"
           >
-            {selectedFile ? '更换宠物视频' : '选择本地视频'}
-          </button>
-
-          {!busy ? (
-            <button
-              type="button"
-              disabled={!selectedFile || !pet}
-              onClick={handleStartAnalyze}
-              className="btn-primary flex-1 min-w-[140px]"
+            {/* 左上圆钮：分身（前往 /create 定制或修改分身） */}
+            <Link
+              href="/create"
+              aria-label={pet ? '定制或修改宠物分身' : '创建你的宠物分身'}
+              className="w-[52px] h-[52px] rounded-full bg-surface-0/95 backdrop-blur-md border border-line-200 shadow-2 flex flex-col items-center justify-center gap-0.5 text-ink-900 hover:bg-brand-50 hover:border-brand-300 transition-colors cursor-pointer"
             >
-              开始抽帧识别
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleCancelAnalyze}
-              className="btn-secondary flex-1 min-w-[140px] border-[#E8B8B3] text-[#B5564E]"
-            >
-              取消分析
-            </button>
-          )}
-        </div>
-
-        <p className="text-[12px] text-ink-500 leading-[18px]">
-          数据流向说明：原视频保留在当前设备本地解码，但抽取的单帧静态画面会发送给所配置的视觉模型服务进行行为识别。
-        </p>
-
-        {!pet && (
-          <p className="text-[12px] text-ink-500">
-            提示：请先
-            <Link href="/create" className="text-brand-600 underline mx-1">
-              创建宠物档案
+              <svg
+                viewBox="0 0 24 24"
+                className="w-4 h-4 text-brand-600"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="8" r="4" />
+                <path d="M5 20c1.5-4 12.5-4 14 0" />
+              </svg>
+              <span className="text-[10px] font-semibold leading-none whitespace-nowrap">
+                分身
+              </span>
             </Link>
-            后再执行视频识别。
-          </p>
-        )}
-      </section>
 
-      {/* 4. 快捷入口与诚实能力边界声明 */}
-      <footer className="pt-1 pb-4 flex flex-col gap-2 text-center">
-        <div className="flex items-center justify-center gap-4 text-[13px] font-medium text-ink-700">
-          <Link
-            href="/records"
-            className="hover:text-brand-600 underline cursor-pointer"
+            {/* 左下圆钮：同步视频（打开视频抽帧同步面板） */}
+            <button
+              type="button"
+              onClick={() => setSheetMode('video')}
+              aria-label="同步视频，上传本地宠物视频识别状态"
+              className="w-[52px] h-[52px] rounded-full bg-surface-0/95 backdrop-blur-md border border-line-200 shadow-2 flex flex-col items-center justify-center gap-0.5 text-ink-900 hover:bg-brand-50 hover:border-brand-300 transition-colors cursor-pointer"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="w-4 h-4 text-brand-500"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="2" y="6" width="14" height="12" rx="2" />
+                <path d="m22 8-6 4 6 4V8Z" />
+              </svg>
+              <span className="text-[10px] font-semibold leading-none whitespace-nowrap">
+                同步视频
+              </span>
+            </button>
+          </div>
+
+          <div
+            aria-label="小屋右侧快捷操作"
+            className="absolute right-3 bottom-[22%] z-30 pointer-events-auto flex flex-col gap-3"
           >
-            查看今日行为记录
-          </Link>
-          <span className="text-line-200">|</span>
-          <Link
-            href="/create"
-            className="hover:text-brand-600 underline cursor-pointer"
-          >
-            {pet ? '查看/管理宠物档案' : '新建宠物档案'}
-          </Link>
-        </div>
-        <p className="text-[12px] text-ink-400 leading-[18px]">
-          能力边界说明：AI 仅识别画面中的宠物基础行为，不提供医疗或健康诊断；在手机屏幕上触摸数字形象仅作用于本地动画，不会传递给现实中的宠物。
-        </p>
-      </footer>
+            {/* 右上圆钮：记录（前往 /records 查看今日记录） */}
+            <Link
+              href="/records"
+              aria-label="查看今日行为记录"
+              className="w-[52px] h-[52px] rounded-full bg-surface-0/95 backdrop-blur-md border border-line-200 shadow-2 flex flex-col items-center justify-center gap-0.5 text-ink-900 hover:bg-brand-50 hover:border-brand-300 transition-colors cursor-pointer"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="w-4 h-4 text-sage-600"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+              </svg>
+              <span className="text-[10px] font-semibold leading-none whitespace-nowrap">
+                记录
+              </span>
+            </Link>
+
+            {/* 右下圆钮：夜灯/日间切换 */}
+            <button
+              type="button"
+              onClick={toggleNightMode}
+              aria-pressed={nightMode}
+              aria-label={nightMode ? '切换为日间阳光房' : '切换为夜晚暖灯房'}
+              className="w-[52px] h-[52px] rounded-full bg-surface-0/95 backdrop-blur-md border border-line-200 shadow-2 flex flex-col items-center justify-center gap-0.5 text-ink-900 hover:bg-brand-50 hover:border-brand-300 transition-colors cursor-pointer"
+            >
+              {nightMode ? (
+                <>
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="w-4 h-4 text-[#D99B26]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                  </svg>
+                  <span className="text-[10px] font-semibold leading-none whitespace-nowrap">
+                    日间
+                  </span>
+                </>
+              ) : (
+                <>
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="w-4 h-4 text-[#6E7894]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                  <span className="text-[10px] font-semibold leading-none whitespace-nowrap">
+                    夜灯
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
+        </CozyRoomScene>
+
+        {/* 底部上拉抽屉（承载本地视频预览/上传进度、完整现实状态卡与能力边界说明） */}
+        <WorldDrawerSheet
+          mode={sheetMode}
+          onClose={() => setSheetMode(null)}
+          pet={pet}
+          realityState={realityState}
+          busy={busy}
+          progress={progress}
+          error={error}
+          videoName={videoName}
+          selectedFile={selectedFile}
+          videoPreviewUrl={videoPreviewUrl}
+          onPickFileClick={() => fileInputRef.current?.click()}
+          onStartAnalyze={handleStartAnalyze}
+          onCancelAnalyze={handleCancelAnalyze}
+          onClearError={() => setError(null)}
+        />
+      </div>
     </div>
   );
 }

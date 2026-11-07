@@ -10,9 +10,9 @@ const config: Config = {
     extend: {
       colors: {
         surface: {
-          0: 'var(--bg-surface-0)',
-          1: 'var(--bg-surface-1)',
-          2: 'var(--bg-surface-2)',
+          0: '#FFFFFF',
+          1: '#FBF8F4',
+          2: '#F6F1EA',
         },
         brand: {
           50: 'var(--brand-50)',
@@ -69,6 +69,7 @@ const config: Config = {
         xl: 'var(--r-xl)',
         pill: 'var(--r-pill)',
       },
+      opacity: { 82: '0.82', 92: '0.92' },
       boxShadow: {
         1: 'var(--sh-1)',
         2: 'var(--sh-2)',

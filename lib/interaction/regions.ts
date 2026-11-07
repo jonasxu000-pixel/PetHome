@@ -1,4 +1,4 @@
-export type PetRegion = 'nose' | 'head' | 'body';
+export type PetRegion = 'nose' | 'head' | 'body' | 'tail';
 
 export interface RelativePoint {
   /** 相对于宠物容器宽度的比例 0 ~ 1 */
@@ -23,24 +23,26 @@ export function toRelativePoint(
 }
 
 /**
- * 按 03_UIUX设计说明.md 判定触控区域：
- * - 优先级：鼻尖圆 > 头部区 > 身体区
- * - 鼻尖区：面部中心 (rx ≈ 0.5, ry ≈ 0.45)，在 240px 容器中半径 ≥ 32px（归一化半径约 0.16，确保触控直径 ≥ 44px）
- * - 头部区：容器上半部分 35% (ry <= 0.35)
- * - 身体区：其余区域
+ * 兜底相对区域判定（主流程由 SVG 分层部位 data-part 直接命中，此函数供外围容器轻点兜底）：
+ * - 优先级：鼻尖圆 > 尾巴侧 > 头部区 > 身体区
  */
 export function hitTestRegion(point: RelativePoint): PetRegion {
   const noseCenterX = 0.5;
-  const noseCenterY = 0.46;
+  const noseCenterY = 0.45;
   const dx = point.rx - noseCenterX;
   const dy = point.ry - noseCenterY;
   const distance = Math.hypot(dx, dy);
 
-  if (distance <= 0.17) {
+  if (distance <= 0.14) {
     return 'nose';
   }
 
-  if (point.ry <= 0.36) {
+  // 右下后侧尾巴热区
+  if (point.rx >= 0.72 && point.ry >= 0.48 && point.ry <= 0.85) {
+    return 'tail';
+  }
+
+  if (point.ry <= 0.4) {
     return 'head';
   }
 

@@ -9,6 +9,7 @@ import {
   type PointerStartSnapshot,
   resolvePointerGesture,
 } from '@/lib/interaction/gestures';
+import type { PetRegion } from '@/lib/interaction/regions';
 import type {
   Behavior,
   InteractionKind,
@@ -26,7 +27,10 @@ export interface ActionLayerProps {
   realityBehavior: Behavior;
   overlay: InteractionOverlay | null;
   onSetOverlay: (overlay: InteractionOverlay) => void;
-  children: React.ReactNode;
+  children: (bindPartPointerDown: (
+    part: PetRegion,
+    e: React.PointerEvent<SVGElement>
+  ) => void) => React.ReactNode;
 }
 
 export function ActionLayer({
@@ -60,26 +64,55 @@ export function ActionLayer({
       return;
     }
     const rect = containerRef.current?.getBoundingClientRect();
-    const fallbackX = rect ? rect.width / 2 : 120;
+    const fallbackX = rect
+      ? kind === 'tap_tail'
+        ? rect.width * 0.74
+        : rect.width / 2
+      : 156;
     const fallbackY = rect
       ? kind === 'tap_head'
-        ? rect.height * 0.25
+        ? rect.height * 0.3
         : kind === 'tap_nose'
-          ? rect.height * 0.46
-          : rect.height * 0.68
-      : 120;
+          ? rect.height * 0.43
+          : kind === 'tap_tail'
+            ? rect.height * 0.65
+            : rect.height * 0.62
+      : 156;
 
     spawnRipple(customX ?? fallbackX, customY ?? fallbackY, isSleeping);
     const nextOverlay = createFeedbackOverlay(kind, realityBehavior, now);
     onSetOverlay(nextOverlay);
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePartPointerDown = (
+    part: PetRegion,
+    e: React.PointerEvent<SVGElement>
+  ) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.stopPropagation();
     startRef.current = {
       clientX: e.clientX,
       clientY: e.clientY,
       timestamp: Date.now(),
+      part,
+    };
+  };
+
+  const handleContainerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (startRef.current && Date.now() - startRef.current.timestamp < 40) {
+      return;
+    }
+    const targetEl = e.target as HTMLElement | null;
+    const partAttr = targetEl
+      ?.closest('[data-part]')
+      ?.getAttribute('data-part') as PetRegion | null;
+
+    startRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      timestamp: Date.now(),
+      part: partAttr ?? null,
     };
   };
 
@@ -111,23 +144,53 @@ export function ActionLayer({
     } else if (e.key === '3') {
       e.preventDefault();
       triggerKind('stroke');
+    } else if (e.key === '4') {
+      e.preventDefault();
+      triggerKind('tap_tail');
     }
   };
 
   return (
-    <div className="flex flex-col items-center w-full gap-3">
-      {/* 触摸互动热区舞台 */}
+    <div className="relative w-full h-full pointer-events-none">
+      {/* 宠物分身精准落位于地毯中心（容器收紧不溢出左右圆钮区，仅 SVG 部位与键盘聚焦响应指针） */}
       <div
         ref={containerRef}
         role="region"
-        aria-label="数字宠物触摸互动舞台，可轻点头部、点鼻尖或左右滑动抚摸"
+        aria-label="数字宠物分身互动舞台，可直接轻点头部、鼻尖、后背或尾巴，也可使用底部快捷栏或数字键 1 至 4"
         tabIndex={0}
-        onPointerDown={handlePointerDown}
+        onPointerDown={handleContainerPointerDown}
         onPointerUp={handlePointerUp}
         onKeyDown={handleKeyDown}
-        className="relative flex flex-col items-center justify-center w-full select-none cursor-pointer touch-pan-y focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 rounded-xl"
+        className="absolute left-1/2 -translate-x-1/2 bottom-[19%] sm:bottom-[18.5%] flex flex-col items-center justify-end select-none touch-pan-y pointer-events-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 rounded-xl"
       >
-        {children}
+        {/* 头顶悬浮反馈气泡 */}
+        <div
+          aria-live="polite"
+          className="min-h-[28px] mb-0.5 flex items-center justify-center pointer-events-none px-2 z-20"
+        >
+          {overlay ? (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-pill bg-surface-0/95 backdrop-blur-md border border-line-200 shadow-2 text-[12px] font-medium text-ink-900 whitespace-nowrap">
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{
+                  backgroundColor:
+                    overlay.level <= 1
+                      ? 'var(--state-sleeping)'
+                      : 'var(--brand-500)',
+                }}
+              />
+              <span>{overlay.message}</span>
+            </div>
+          ) : (
+            <span className="text-[11px] font-medium text-ink-700 bg-surface-0/82 backdrop-blur-sm px-3 py-0.5 rounded-pill border border-line-200/80 shadow-1 whitespace-nowrap">
+              {isSleeping
+                ? '熟睡中 · 轻触仅有轻微反应'
+                : '轻触头、鼻、背或长尾互动'}
+            </span>
+          )}
+        </div>
+
+        {children(handlePartPointerDown)}
 
         {/* 触摸水波涟漪层 */}
         {ripples.map((r) => (
@@ -141,45 +204,13 @@ export function ActionLayer({
             }}
           />
         ))}
-
-        {/* 单行克制反馈文案浮层（aria-live 播报） */}
-        <div
-          aria-live="polite"
-          className="min-h-[34px] mt-2 flex items-center justify-center pointer-events-none"
-        >
-          {overlay ? (
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-pill bg-surface-0/95 border border-line-200 shadow-1 text-[13px] font-medium text-ink-900 transition-opacity duration-200">
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{
-                  backgroundColor:
-                    overlay.level <= 1
-                      ? 'var(--state-sleeping)'
-                      : 'var(--brand-500)',
-                }}
-              />
-              <span>{overlay.message}</span>
-              {overlay.level <= 1 && (
-                <span className="text-[11px] text-ink-400 ml-0.5">
-                  (熟睡轻反应)
-                </span>
-              )}
-            </div>
-          ) : (
-            <p className="text-[12px] text-ink-400">
-              {isSleeping
-                ? '正在熟睡中 · 轻触仅会产生轻微反应，不会吵醒它'
-                : '轻点头部、点鼻尖，或在身上左右滑动抚摸'}
-            </p>
-          )}
-        </div>
       </div>
 
-      {/* 无障碍键盘与按钮替代触发区（确保非指针设备与辅助技术可完整体验 3 种互动） */}
+      {/* 底部精致胶囊小 Dock（单行紧凑 4 部位互动快捷按钮，开启独立 pointer-events-auto） */}
       <div
         role="group"
-        aria-label="宠物互动快捷按钮"
-        className="grid grid-cols-3 gap-2 w-full max-w-[340px]"
+        aria-label="宠物四部位互动快捷栏"
+        className="absolute left-1/2 -translate-x-1/2 bottom-3.5 z-30 pointer-events-auto inline-flex items-center gap-1.5 p-1 rounded-pill bg-surface-0/90 backdrop-blur-md border border-line-200 shadow-2"
       >
         {INTERACTION_ACTIONS_META.map((item) => {
           const isActive = overlay?.kind === item.kind;
@@ -189,17 +220,14 @@ export function ActionLayer({
               type="button"
               disabled={isCoolingDown}
               onClick={() => triggerKind(item.kind)}
-              aria-label={`${item.label}（${item.gestureHint}）`}
-              className={`flex flex-col items-center justify-center py-2 px-2.5 min-h-[44px] rounded-md border text-[13px] font-medium cursor-pointer transition-colors duration-200 ${
+              aria-label={`${item.label}（${item.gestureHint}，快捷键 ${item.keyShortcut}）`}
+              className={`px-3.5 py-1.5 min-h-[36px] rounded-pill text-[12px] font-semibold whitespace-nowrap cursor-pointer transition-colors duration-150 ${
                 isActive
-                  ? 'bg-brand-50 border-brand-400 text-brand-600'
-                  : 'bg-surface-0 border-line-200 text-ink-700 hover:bg-brand-50/60 hover:border-brand-200'
+                  ? 'bg-brand-500 text-white shadow-1'
+                  : 'text-ink-900 hover:bg-brand-50'
               } disabled:opacity-60 disabled:cursor-not-allowed`}
             >
-              <span>{item.label}</span>
-              <span className="text-[11px] text-ink-400 font-normal">
-                {item.gestureHint}
-              </span>
+              {item.shortLabel}
             </button>
           );
         })}

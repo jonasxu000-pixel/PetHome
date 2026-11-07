@@ -4,6 +4,21 @@ export type RecognitionStatus = 'ok' | 'low_confidence' | 'failed' | 'timeout' |
 export type ReasonCode = 'none' | 'no_pet' | 'too_blurry' | 'multi_pet' | 'unclear';
 export type Personality = 'lively' | 'clingy' | 'aloof';
 export type PetType = 'cat' | 'dog' | 'other';
+export interface AvatarProfile {
+  version: 1;
+  species: 'cat' | 'dog';
+  coatColor: string;
+  patchColor: string;
+  muzzleColor: string;
+  eyeColor: string;
+  collarColor: string;
+  earShape: 'floppy' | 'pointed';
+  pattern: 'solid' | 'tuxedo' | 'spotted';
+  origin: 'starter' | 'photo_palette' | 'ai_vision' | 'manual';
+  generatedAt: string;
+  model?: string | null;
+  verification?: string;
+}
 export interface RecognitionResult {
   petId: string;
   sessionId?: string | null;
@@ -39,6 +54,7 @@ export interface Pet {
   photoUrl: string | null;
   createdAt: string;
   updatedAt: string;
+  avatar?: AvatarProfile;
 }
 export interface BehaviorInterval {
   id: string;
@@ -55,7 +71,7 @@ export interface BehaviorInterval {
   dayKey: string;
   createdAt: string;
 }
-export type InteractionKind = 'tap_head' | 'tap_nose' | 'stroke';
+export type InteractionKind = 'tap_head' | 'tap_nose' | 'stroke' | 'tap_tail';
 export interface InteractionOverlay {
   kind: InteractionKind;
   level: 0 | 1 | 2 | 3;

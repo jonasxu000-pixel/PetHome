@@ -99,7 +99,7 @@ export async function getDeviceId(): Promise<string> {
   return deviceId;
 }
 
-/** 建档：写入 pets 并记住当前宠物（单宠物，不做覆盖删除） */
+/** 建档/编辑：写入 pets 并记住当前宠物（单宠物，不做覆盖删除） */
 export async function savePet(pet: Pet): Promise<string> {
   const db = await getDB();
   const tx = db.transaction(['pets', 'meta'], 'readwrite');
@@ -109,8 +109,8 @@ export async function savePet(pet: Pet): Promise<string> {
   return pet.id;
 }
 
-/** 读取当前宠物；meta 丢失时回落到 pets 里最近创建的一条 */
-export async function getPet(): Promise<Pet | null> {
+/** 仅本地读取：meta 丢失时回落到 pets 里最近创建的一条 */
+async function readLocalPet(): Promise<Pet | null> {
   const db = await getDB();
   const current = await db.get('meta', 'currentPetId');
   if (current && current.value) {
@@ -121,6 +121,59 @@ export async function getPet(): Promise<Pet | null> {
   if (all.length === 0) return null;
   all.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return all[0] ?? null;
+}
+
+/** 只写本地（服务端恢复时使用，避免再次触发同步逻辑造成递归） */
+async function writePetLocally(pet: Pet): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['pets', 'meta'], 'readwrite');
+  await tx.objectStore('pets').put(pet);
+  await tx.objectStore('meta').put({ key: 'currentPetId', value: pet.id });
+  await tx.done;
+}
+
+/**
+ * 服务端匿名档案恢复（同源 Cookie），能力由 lib/avatar/client.ts 提供。
+ * 语义：null = 服务端确实没有档案；失败一律向上抛错，让页面进错误态。
+ * 绝不能把"读不到"降级成"没有档案"，否则有服务端档案的用户会被误导重新建档。
+ */
+async function loadPetFromServer(): Promise<Pet | null> {
+  let mod: typeof import('@/lib/avatar/client');
+  try {
+    mod = await import('@/lib/avatar/client');
+  } catch (error) {
+    throw new Error(`无法加载服务端档案能力：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (typeof mod.loadProfileFromServer !== 'function') {
+    throw new Error('服务端档案能力不可用（loadProfileFromServer 缺失）');
+  }
+  // 这里不 try/catch：网络或接口失败直接冒泡给页面
+  const remote = await mod.loadProfileFromServer();
+  if (!remote) return null;
+  if (typeof remote.id !== 'string' || remote.id.length === 0) {
+    throw new Error('服务端返回的档案数据不合法（缺少 id）');
+  }
+  return remote;
+}
+
+/**
+ * 读取当前宠物：本地优先；本地为空时尝试服务端匿名档案，成功后写回本地（不递归调用 getPet）。
+ * 服务端读取失败会抛错，由页面展示错误态并提供重试。
+ */
+export async function getPet(): Promise<Pet | null> {
+  const local = await readLocalPet();
+  if (local) return local;
+
+  const remote = await loadPetFromServer();
+  if (!remote) return null;
+
+  try {
+    await writePetLocally(remote);
+  } catch (error) {
+    // 写回失败不影响本次展示，但要留下真实痕迹
+    console.warn('[pethome] 服务端档案写回本地失败', error);
+  }
+  return remote;
 }
 
 function frameKey(frame: RecognitionResult): string {
