@@ -1,0 +1,10 @@
+import type { Behavior, DataSource, Personality, PetType } from './types';
+export const BEHAVIOR_LABELS: Record<Behavior,string> = { sleeping:'睡觉',walking:'走动',eating:'进食',playing:'玩耍',unknown:'未知' };
+export const SOURCE_LABELS: Record<DataSource,string> = { upload:'上传片段',camera:'摄像头',preset:'演示数据' };
+export const PERSONALITY_LABELS: Record<Personality,string> = { lively:'活泼型',clingy:'黏人型',aloof:'高冷型' };
+export const PET_TYPE_LABELS: Record<PetType,string> = { cat:'猫咪',dog:'狗狗',other:'其他' };
+export const SAMPLE_INTERVAL_SEC = 4;
+export const MAX_VIDEO_SECONDS = 30;
+export const MAX_VIDEO_BYTES = 32 * 1024 * 1024;
+export const STALE_AFTER_MS = 15000;
+export const MIN_HOLD_MS = 6000;
