@@ -8,6 +8,14 @@ function uuid() {
   const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
   const h=Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
+function pause(ms:number,signal?:AbortSignal):Promise<void> {
+  if(ms<=0){signal?.throwIfAborted();return Promise.resolve();}
+  return new Promise((resolve,reject)=>{
+    const abort=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(new DOMException('已取消','AbortError'));};
+    const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},ms);
+    signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+  });
+}
 async function requestFrame(payload:unknown,signal?:AbortSignal):Promise<RecognitionResult> {
   for(let attempt=0;attempt<2;attempt++) {
     signal?.throwIfAborted();
@@ -26,6 +34,7 @@ async function requestFrame(payload:unknown,signal?:AbortSignal):Promise<Recogni
       if(e.name==='TimeoutError') {e.code='AI_TIMEOUT';e.retriable=true;}
       const retry=e.retriable??(error instanceof TypeError);
       if(!retry||attempt===1)throw error;
+      await pause(e.code==='RATE_LIMITED'?4000:1500,signal);
     }
   }
   throw new Error('识别请求未完成。');
@@ -40,8 +49,11 @@ export async function analyzeVideo(file:File,options:{signal?:AbortSignal}={}):P
   try {
     const frames=await extractFrames(file,{signal:options.signal});
     initial.setProgress(0,frames.length);
+    let nextRequestAt=0;
     for(const frame of frames) {
       options.signal?.throwIfAborted();
+      await pause(nextRequestAt-Date.now(),options.signal);
+      nextRequestAt=Date.now()+4000;
       let result:RecognitionResult;
       try {
         const data=await requestFrame({sessionId,petId,image:frame.image,imageHash:frame.imageHash,source:'upload',seq:frame.seq,capturedAt:frame.capturedAt},options.signal);

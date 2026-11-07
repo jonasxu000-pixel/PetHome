@@ -20,8 +20,13 @@ test('whole fenced JSON and provider snake case are parsed, without extracting g
 test('free model route never silently invokes Gemini as fallback',async()=>{
   const previous={provider:process.env.AI_PROVIDER,zhipu:process.env.ZHIPU_API_KEY,gemini:process.env.GEMINI_API_KEY,fetch:globalThis.fetch};
   process.env.AI_PROVIDER='zhipu';process.env.ZHIPU_API_KEY='fixture-only';process.env.GEMINI_API_KEY='fixture-only';
-  const urls:string[]=[];
-  globalThis.fetch=async(input)=>{urls.push(String(input));return new Response(null,{status:503});};
-  try {await assert.rejects(()=>runVision('data:image/jpeg;base64,abcd','test',()=>({})),ProviderError);assert.equal(urls.length,1);assert.ok(urls[0].startsWith('https://open.bigmodel.cn/'));}
+  const calls:{url:string;model:string}[]=[];
+  globalThis.fetch=async(input,init)=>{calls.push({url:String(input),model:JSON.parse(init?.body as string).model});return new Response(null,{status:503});};
+  try {await assert.rejects(()=>runVision('data:image/jpeg;base64,abcd','test',()=>({})),ProviderError);assert.equal(calls.length,2);assert.ok(calls.every(x=>x.url.startsWith('https://open.bigmodel.cn/')));assert.deepEqual(calls.map(x=>x.model),['glm-4.6v-flash','glm-4.1v-thinking-flash']);}
   finally {globalThis.fetch=previous.fetch;for(const [name,value]of [['AI_PROVIDER',previous.provider],['ZHIPU_API_KEY',previous.zhipu],['GEMINI_API_KEY',previous.gemini]])if(value===undefined)delete process.env[name!];else process.env[name!]=value;}
+});
+test('closed reasoning prefix is removed without extracting guessed fields',()=>{
+  const value=parseObservation('<think>internal vendor trace</think>\n```json\n{"behavior":"unknown","confidence":null,"hasPet":false,"reasonCode":"no_pet"}\n```');
+  assert.equal(value.reasonCode,'no_pet');
+  assert.throws(()=>parseObservation('<think>unfinished reasoning'),ProviderError);
 });
