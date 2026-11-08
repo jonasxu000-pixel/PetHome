@@ -12,7 +12,12 @@ async function secret():Promise<Buffer> {
   })().catch(error=>{secretPromise=undefined;throw error;});
   return secretPromise;
 }
-function content(a:AvatarProfile):string {return JSON.stringify([a.version,a.species,a.coatColor,a.patchColor,a.muzzleColor,a.eyeColor,a.collarColor,a.earShape,a.pattern,a.origin,a.generatedAt,a.model]);}
+function content(a:AvatarProfile):string {
+  const fields:unknown[]=[a.version,a.species,a.coatColor,a.patchColor,a.muzzleColor,a.eyeColor,a.collarColor,a.earShape,a.pattern,a.origin,a.generatedAt,a.model];
+  // Keep historical signatures valid; new customization fields are signed when present.
+  if(a.modelPresetId!==undefined||a.traits!==undefined)fields.push(a.modelPresetId??null,a.traits??null);
+  return JSON.stringify(fields);
+}
 export async function signAvatar(a:AvatarProfile):Promise<AvatarProfile> {return {...a,verification:createHmac('sha256',await secret()).update(content(a)).digest('hex')};}
 export async function verifiedAvatar(a:AvatarProfile):Promise<boolean> {
   if(a.origin!=='ai_vision')return true;

@@ -1,0 +1,19 @@
+{
+  "source": "dalmatian.glb",
+  "runtime": "dalmatian-mobile.glb",
+  "sourceBytes": 7054996,
+  "runtimeBytes": 1508444,
+  "textureBefore": [
+    2048,
+    2048
+  ],
+  "textureAfter": [
+    1024,
+    1024
+  ],
+  "triangles": 39080,
+  "skins": 0,
+  "animations": 0,
+  "sha256": "08f12945cd83373dd11ca302252156260e8f689c08a69919b5a5b48aeb66c7a7",
+  "changes": "Texture resized to 1024px and JPEG; geometry, UVs and materials preserved."
+}

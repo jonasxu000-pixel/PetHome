@@ -9,6 +9,7 @@ import { getDeviceId, getPet, newId, savePet } from '@/lib/db';
 import { usePetStore } from '@/lib/store';
 import { PERSONALITY_LABELS, PET_TYPE_LABELS } from '@/lib/constants';
 import { avatarOriginLabel, defaultAvatar, validateAvatar } from '@/lib/avatar/profile';
+import { getPetModel, getPetModelPresets } from '@/lib/pet3d/catalog';
 import type { AvatarProfile, Personality, Pet, PetType } from '@/lib/types';
 
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024; // 原图上限 8MB
@@ -118,12 +119,14 @@ export default function CreatePetPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncCode, setSyncCode] = useState<string | null>(null);
   const [savedPet, setSavedPet] = useState<Pet | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
   /** 生成请求序号：只有最新一次的结果会被采纳，避免竞态写入旧 avatar */
   const genSeqRef = useRef(0);
+  const photoSeqRef = useRef(0);
 
   const loadExisting = useCallback(async () => {
     setLoading(true);
@@ -152,6 +155,7 @@ export default function CreatePetPage() {
 
   useEffect(() => {
     return () => {
+      photoSeqRef.current += 1;
       generateAbortRef.current?.abort();
     };
   }, []);
@@ -159,11 +163,13 @@ export default function CreatePetPage() {
   const trimmedName = name.trim();
   const nameInvalid = trimmedName.length === 0 || trimmedName.length > NAME_MAX;
   const previewAvatar = avatar ?? defaultAvatar(petType);
+  const selectedPreset = getPetModel(previewAvatar, petType);
+  const modelPresets = getPetModelPresets(petType);
 
   /** 手动改外观：origin 记为 manual，model 置空（不再是模型产物） */
   function applyManual(patch: Partial<AvatarProfile>) {
     // 用户开始手动调色即视为接管，作废在途生成，避免覆盖手改结果
-    if (generating) cancelGenerate();
+    if (generating || compressing) cancelGenerate();
     setAvatar((prev) => {
       const base = prev ?? defaultAvatar(petType);
       const next: AvatarProfile = {
@@ -188,7 +194,7 @@ export default function CreatePetPage() {
       // 交给 validateAvatar 自动丢弃原有的 AI 签名（非 AI 来源不应带 verification）
       const species: AvatarProfile['species'] = next === 'cat' ? 'cat' : 'dog';
       const nextAvatar: AvatarProfile = {
-        ...prev,
+        ...defaultAvatar(next),
         species,
         origin: 'manual',
         model: null,
@@ -202,9 +208,19 @@ export default function CreatePetPage() {
   function cancelGenerate() {
     // 递增序号让在途请求的结果作废，避免旧照片/旧类型的结果覆盖新状态
     genSeqRef.current += 1;
+    photoSeqRef.current += 1;
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
     setGenerating(false);
+    setCompressing(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function detachPhotoObservation() {
+    setAvatar(previous => {
+      if (!previous || !['ai_vision', 'photo_palette'].includes(previous.origin)) return previous;
+      return validateAvatar({ ...previous, origin: 'manual', model: null, verification: undefined, generatedAt: new Date().toISOString() });
+    });
   }
 
   async function generateAvatar(source: string, type: PetType) {
@@ -231,6 +247,7 @@ export default function CreatePetPage() {
       const safe = validateAvatar(result?.avatar);
       if (!safe) throw new Error('生成的分身数据不合法，已保留原有外观');
       setAvatar(safe);
+      setPetType(safe.species);
       setGenerateNotice(result.notice ?? null);
     } catch (e) {
       if (seq !== genSeqRef.current) return; // 过期失败不打扰用户
@@ -252,6 +269,7 @@ export default function CreatePetPage() {
     if (!file) return;
     // 换图即作废上一张图在途的生成结果
     cancelGenerate();
+    const photoSeq = ++photoSeqRef.current;
     setGenerateError(null);
     setGenerateNotice(null);
     if (!file.type.startsWith('image/')) {
@@ -265,6 +283,8 @@ export default function CreatePetPage() {
     setCompressing(true);
     try {
       const compressed = await compressToJpegDataUrl(file);
+      if (photoSeq !== photoSeqRef.current) return;
+      detachPhotoObservation();
       setPhotoUrl(compressed);
       setCompressing(false);
       if (petType === 'other') {
@@ -273,16 +293,19 @@ export default function CreatePetPage() {
       }
       await generateAvatar(compressed, petType);
     } catch (e) {
+      if (photoSeq !== photoSeqRef.current) return;
       setGenerateError(e instanceof Error ? e.message : '照片处理失败');
     } finally {
-      setCompressing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (photoSeq === photoSeqRef.current) {
+        setCompressing(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
     }
   }
 
   function buildPet(): Pet {
     const now = new Date().toISOString();
-    const safeAvatar = validateAvatar(avatar);
+    const safeAvatar = validateAvatar(avatar ?? defaultAvatar(petType));
     const base: Pet = existingPet ?? {
       id: newId(),
       ownerDeviceId: '',
@@ -310,6 +333,7 @@ export default function CreatePetPage() {
   async function syncToServer(pet: Pet): Promise<boolean> {
     setSyncState('syncing');
     setSyncError(null);
+    setSyncCode(null);
     try {
       const mod = await import('@/lib/avatar/client');
       if (typeof mod.saveProfileToServer !== 'function') {
@@ -318,9 +342,11 @@ export default function CreatePetPage() {
       await mod.saveProfileToServer(pet);
       setSyncState('ok');
       return true;
-    } catch {
+    } catch (error) {
       setSyncState('failed');
-      setSyncError('已保存在此设备，服务端同步失败，可重试。');
+      const failure = error as { code?: string; message?: string };
+      setSyncCode(failure.code ?? null);
+      setSyncError('已保存在此设备。' + (failure.code && failure.message ? failure.message : '服务端暂时无法同步，可稍后重试。'));
       return false;
     }
   }
@@ -358,6 +384,17 @@ export default function CreatePetPage() {
     if (synced) router.push('/');
   }
 
+  async function confirmManualAndSync() {
+    if (!savedPet || syncState === 'syncing') return;
+    const confirmed = validateAvatar({ ...(savedPet.avatar ?? previewAvatar), origin: 'manual', model: null, verification: undefined, generatedAt: new Date().toISOString() });
+    if (!confirmed) return;
+    const updated = { ...savedPet, avatar: confirmed, updatedAt: new Date().toISOString() };
+    try {
+      await savePet(updated); setAvatar(confirmed); setSavedPet(updated); setPet(updated);
+      if (await syncToServer(updated)) router.push('/');
+    } catch (error) { setSaveError(error instanceof Error ? error.message : '本机保存未成功，请重试。'); }
+  }
+
   if (loading) {
     return (
       <main className="page-container">
@@ -384,7 +421,7 @@ export default function CreatePetPage() {
       <h1 className="page-title">{isEdit ? '定制我的分身' : '创建我的分身'}</h1>
       <p className="muted-text mt-1">
         {isEdit
-          ? '已有档案可以继续编辑外观，原有的生活记录会保留。'
+          ? '可以继续定制分身，原有宠物资料会保留。'
           : '档案与分身只存在这台设备的浏览器里，并尝试同步到本机服务端。'}
       </p>
 
@@ -458,7 +495,7 @@ export default function CreatePetPage() {
           </div>
 
           {/* 上传前必须让用户看到：照片会被发送到配置的 AI 视觉服务 */}
-          <p className="muted-text">照片用于读取外观（毛色/花纹/耳型等），会发送至所配置的 AI 服务，不做其他用途。</p>
+          <p className="muted-text">照片压缩后发送给已配置的视觉 AI，识别毛色、花纹和体型，再匹配现有 3D 分身。不会用照片自动重建 3D 模型。</p>
 
           <div className="flex items-center gap-3">
             <div
@@ -497,12 +534,12 @@ export default function CreatePetPage() {
                     disabled={generating || compressing || petType === 'other'}
                     onClick={() => void generateAvatar(photoUrl, petType)}
                   >
-                    用这张照片生成分身
+                    识别照片并匹配 3D 分身
                   </button>
                 ) : null}
                 {generating ? (
-                  <button type="button" className="btn-secondary px-3 py-2 text-[13px]" onClick={cancelGenerate}>
-                    取消生成
+                  <button type="button" className="btn-secondary px-3 py-2 text-[13px]" onClick={() => { cancelGenerate(); setGenerateNotice('已取消本次识别，保留当前外观。请确认后再保存。'); }}>
+                    取消识别
                   </button>
                 ) : null}
                 {photoUrl ? (
@@ -511,6 +548,7 @@ export default function CreatePetPage() {
                     className="muted-text text-left"
                     onClick={() => {
                       cancelGenerate();
+                      detachPhotoObservation();
                       setPhotoUrl(null);
                       setGenerateNotice(null);
                       setGenerateError(null);
@@ -523,7 +561,7 @@ export default function CreatePetPage() {
             </div>
           </div>
 
-          {generating ? <p className="muted-text">正在根据照片生成分身…</p> : null}
+          {generating ? <p role="status" className="muted-text">正在识别照片外观并匹配 3D 预设…</p> : null}
           {generateNotice ? <p className="muted-text">{generateNotice}</p> : null}
           {generateError ? (
             <ErrorBanner
@@ -548,115 +586,81 @@ export default function CreatePetPage() {
 
           <div className="flex flex-col items-center gap-2">
             <div
-              className="h-[180px] w-[180px]"
+              className="h-[240px] w-full max-w-[300px]"
               style={{ backgroundColor: 'var(--bg-surface-2)', borderRadius: 'var(--r-md)' }}
             >
               {/* 与房间内同一个分身角色组件（A 的 PetAvatar，默认 behavior=unknown / overlay=null / 非交互） */}
               <PetAvatar avatar={previewAvatar} />
             </div>
             <p className="muted-text text-center text-[12px]">
-              毛色 {previewAvatar.coatColor} · 花纹 {PATTERN_LABELS[previewAvatar.pattern]} · 耳型{' '}
-              {EAR_LABELS[previewAvatar.earShape]} · 眼睛 {previewAvatar.eyeColor} · 项圈{' '}
-              {previewAvatar.collarColor}
+              {selectedPreset?.label ?? '当前类型暂无可用 3D 预设'}
             </p>
           </div>
 
+          {previewAvatar.origin === 'ai_vision' && (
+            <div className="rounded-lg bg-surface-2 p-3 text-[12px] text-ink-700" data-testid="appearance-observation">
+              <p className="font-medium">照片识别：{previewAvatar.species === 'cat' ? '猫咪' : '狗狗'} · {({ short: '短毛', long: '长毛', unknown: '毛长未看清' } as const)[previewAvatar.traits?.coatLength ?? 'unknown']} · {({ slim: '偏瘦', average: '匀称', round: '圆润', unknown: '体型未看清' } as const)[previewAvatar.traits?.bodyShape ?? 'unknown']}</p>
+              <p className="mt-1">花纹：{({ solid: '纯色', bicolor: '双色', tabby: '条纹', calico: '三花', spotted: '斑块', unknown: '未看清' } as const)[previewAvatar.traits?.facePattern ?? 'unknown']}；{previewAvatar.traits?.unknownFields.includes('eyeColor') ? '眼色未看清，使用默认预览。' : '请核对预设与照片的差异。'}</p>
+            </div>
+          )}
+
+          <fieldset>
+            <legend className="field-label">选择 3D 外观预设</legend>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {modelPresets.map(preset => (
+                <button key={preset.id} type="button" aria-pressed={selectedPreset?.id === preset.id}
+                  className={selectedPreset?.id === preset.id ? 'btn-primary px-2 py-2 text-[13px]' : 'btn-secondary px-2 py-2 text-[13px]'}
+                  onClick={() => applyManual({ modelPresetId: preset.id, coatColor: preset.primaryColor, patchColor: preset.secondaryColor ?? preset.primaryColor })}>
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <p className="muted-text">{selectedPreset?.description} 体型与脸部花纹采用最接近的预设，不能精确还原每一块毛纹。</p>
+          {selectedPreset?.creator && <p className="muted-text text-[11px]">
+            模型：<a href={selectedPreset.source} target="_blank" rel="noreferrer" className="underline">{selectedPreset.creator} / Sloyd</a>
+            {' · '}<a href={selectedPreset.licenseUrl} target="_blank" rel="noreferrer" className="underline">{selectedPreset.license}</a>
+            {' · 贴图已压缩，部分毛色采用近似微调。'}
+          </p>}
+
           <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="field-label">毛色</span>
+            {!!selectedPreset?.customization.coatMaterialNames.length && <label className="flex flex-col gap-1">
+              <span className="field-label">毛色微调</span>
               <input
+                aria-label="毛色微调"
                 type="color"
                 className="h-9 w-full"
                 value={safeColor(previewAvatar.coatColor, '#C8A27A')}
                 onChange={(e) => applyManual({ coatColor: safeColor(e.target.value, previewAvatar.coatColor) })}
               />
-            </label>
+            </label>}
 
-            <label className="flex flex-col gap-1">
+            {!!selectedPreset?.customization.eyeMaterialNames?.length && <label className="flex flex-col gap-1">
               <span className="field-label">眼睛颜色</span>
               <input
+                aria-label="眼睛颜色"
                 type="color"
                 className="h-9 w-full"
                 value={safeColor(previewAvatar.eyeColor, '#3B3128')}
                 onChange={(e) => applyManual({ eyeColor: safeColor(e.target.value, previewAvatar.eyeColor) })}
               />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="field-label">项圈颜色</span>
-              <input
-                type="color"
-                className="h-9 w-full"
-                value={safeColor(previewAvatar.collarColor, '#7FA98B')}
-                onChange={(e) => applyManual({ collarColor: safeColor(e.target.value, previewAvatar.collarColor) })}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="field-label">口鼻颜色</span>
-              <input
-                type="color"
-                className="h-9 w-full"
-                value={safeColor(previewAvatar.muzzleColor, '#F4E4D4')}
-                onChange={(e) => applyManual({ muzzleColor: safeColor(e.target.value, previewAvatar.muzzleColor) })}
-              />
-            </label>
+            </label>}
+            {!!selectedPreset?.customization.patchMaterialNames?.length && <label className="flex flex-col gap-1">
+              <span className="field-label">局部毛色</span>
+              <input aria-label="局部毛色" type="color" className="h-9 w-full" value={safeColor(previewAvatar.patchColor, '#8C6A4A')}
+                onChange={e => applyManual({ patchColor: safeColor(e.target.value, previewAvatar.patchColor) })} />
+            </label>}
           </div>
-
-          <div>
-            <span className="field-label">耳型</span>
-            <div className="mt-1 flex gap-2">
-              {(Object.keys(EAR_LABELS) as AvatarProfile['earShape'][]).map((key) => {
-                const active = previewAvatar.earShape === key;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    aria-pressed={active}
-                    className={active ? 'btn-primary flex-1 px-3 py-2 text-[14px]' : 'btn-secondary flex-1 px-3 py-2 text-[14px]'}
-                    onClick={() => applyManual({ earShape: key })}
-                  >
-                    {EAR_LABELS[key]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <span className="field-label">花纹</span>
-            <div className="mt-1 flex gap-2">
-              {(Object.keys(PATTERN_LABELS) as AvatarProfile['pattern'][]).map((key) => {
-                const active = previewAvatar.pattern === key;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    aria-pressed={active}
-                    className={active ? 'btn-primary flex-1 px-3 py-2 text-[14px]' : 'btn-secondary flex-1 px-3 py-2 text-[14px]'}
-                    onClick={() => applyManual({ pattern: key })}
-                  >
-                    {PATTERN_LABELS[key]}
-                  </button>
-                );
-              })}
-            </div>
-            {previewAvatar.pattern !== 'solid' ? (
-              <label className="mt-2 flex flex-col gap-1">
-                <span className="field-label">花纹颜色</span>
-                <input
-                  type="color"
-                  className="h-9 w-full"
-                  value={safeColor(previewAvatar.patchColor, '#8C6A4A')}
-                  onChange={(e) => applyManual({ patchColor: safeColor(e.target.value, previewAvatar.patchColor) })}
-                />
-              </label>
-            ) : null}
-          </div>
+          {!selectedPreset?.customization.coatMaterialNames.length && <p className="muted-text">当前角色使用原始贴图，通过上方预设切换外观，不对整张贴图强制染色。</p>}
         </section>
 
         {saveError ? <ErrorBanner message={saveError} /> : null}
-        {syncError ? <ErrorBanner message={syncError} onRetry={() => void retrySync()} /> : null}
+        {syncError ? <ErrorBanner message={syncError} onRetry={syncCode === 'PROFILE_UNREADABLE' || syncCode === 'UNVERIFIED_AVATAR' ? undefined : () => void retrySync()} /> : null}
+        {syncState === 'failed' && savedPet && <div className="flex flex-col gap-2">
+          {syncCode === 'UNVERIFIED_AVATAR' && <button type="button" className="btn-secondary" onClick={() => void confirmManualAndSync()}>手动确认当前外观并保存</button>}
+          <Link href="/" className="btn-secondary text-center">进入小屋（使用本机已保存资料）</Link>
+        </div>}
 
         <button
           type="submit"
@@ -664,7 +668,7 @@ export default function CreatePetPage() {
           disabled={saving || compressing || generating || nameInvalid || syncState === 'syncing'}
         >
           {generating
-            ? '分身生成中，稍候可保存…'
+            ? '照片识别中，稍候可保存…'
             : saving || syncState === 'syncing'
               ? '保存中…'
               : isEdit
@@ -675,9 +679,6 @@ export default function CreatePetPage() {
         <div className="flex justify-center gap-3">
           <Link className="muted-text" href="/">
             回到首页
-          </Link>
-          <Link className="muted-text" href="/records">
-            查看记录
           </Link>
         </div>
       </form>

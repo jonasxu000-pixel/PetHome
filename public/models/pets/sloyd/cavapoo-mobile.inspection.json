@@ -1,0 +1,19 @@
+{
+  "source": "cavapoo.glb",
+  "runtime": "cavapoo-mobile.glb",
+  "sourceBytes": 7127312,
+  "runtimeBytes": 1557472,
+  "textureBefore": [
+    2048,
+    2048
+  ],
+  "textureAfter": [
+    1024,
+    1024
+  ],
+  "triangles": 39182,
+  "skins": 0,
+  "animations": 0,
+  "sha256": "9dd88030f195ca356ee4f48a820a82a91b4c4985bbe563a77a6f404f367743ed",
+  "changes": "Texture resized to 1024px and JPEG; geometry, UVs and materials preserved."
+}

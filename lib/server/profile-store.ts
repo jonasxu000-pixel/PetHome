@@ -23,12 +23,41 @@ function pathFor(key:string) {
   if(!keyPattern.test(key))throw new Error('Invalid profile key');
   return join(process.cwd(),'.pethome-data','profiles',key+'.json');
 }
+export const PROFILE_UNREADABLE='PROFILE_UNREADABLE';
+const UNREADABLE_MESSAGE='已保存的档案无法读取（文件损坏或与当前版本不兼容）。原文件已保留，本次操作不会覆盖或删除它。';
+function unreadable():never {
+  throw Object.assign(new Error(UNREADABLE_MESSAGE),{status:409,code:PROFILE_UNREADABLE});
+}
+function profilesDir():string {
+  return join(process.cwd(),'.pethome-data','profiles');
+}
+/**
+ * 读取一个档案文件。语义（与 lib/db/index.ts 的约定一致）：
+ *   null  = 文件确实不存在（ENOENT），服务端确实没有档案；
+ *   抛错  = 存在但读不出来（JSON 损坏 / 不符合现有 schema / 其他 IO 错误）。
+ * 坏档案一律原样保留，不删除、不改名、不返回 null（否则会被当成空档并被新档案覆盖）。
+ */
+async function loadProfileFile(file:string):Promise<Pet|null> {
+  let text:string;
+  try{text=await readFile(file,'utf8');}
+  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;}
+  let parsed:unknown;
+  try{parsed=JSON.parse(text);}catch{return unreadable();}
+  const pet=validatePet(parsed);
+  if(!pet)return unreadable();
+  return pet;
+}
 export async function readProfile(key:string):Promise<Pet|null> {
-  try {return validatePet(JSON.parse(await readFile(pathFor(key),'utf8')));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;}
+  return loadProfileFile(pathFor(key));
 }
 export async function writeProfile(pet:Pet,existingKey:string|null):Promise<string> {
-  const key=existingKey??randomBytes(32).toString('hex'),file=pathFor(key);
-  await mkdir(join(process.cwd(),'.pethome-data','profiles'),{recursive:true});
+  const key=existingKey??randomBytes(32).toString('hex'),file=pathFor(key),dir=profilesDir();
+  await mkdir(dir,{recursive:true});
+  if(existingKey!==null){
+    // 覆盖前先确认目标文件不是坏档案：坏档案抛 PROFILE_UNREADABLE(409)，
+    // 写入在这里中止——不删除原文件、不改 cookie、不静默覆盖。
+    await loadProfileFile(file);
+  }
   const temporary=file+'.'+randomBytes(6).toString('hex')+'.tmp';
   await writeFile(temporary,JSON.stringify(pet),{encoding:'utf8',mode:0o600});
   await rename(temporary,file);

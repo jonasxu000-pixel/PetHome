@@ -4,6 +4,13 @@ export type RecognitionStatus = 'ok' | 'low_confidence' | 'failed' | 'timeout' |
 export type ReasonCode = 'none' | 'no_pet' | 'too_blurry' | 'multi_pet' | 'unclear';
 export type Personality = 'lively' | 'clingy' | 'aloof';
 export type PetType = 'cat' | 'dog' | 'other';
+export interface PetVisualTraits {
+  coatLength: 'short' | 'long' | 'unknown';
+  bodyShape: 'slim' | 'average' | 'round' | 'unknown';
+  facePattern: 'solid' | 'bicolor' | 'tabby' | 'calico' | 'spotted' | 'unknown';
+  earShape: 'floppy' | 'pointed' | 'folded' | 'unknown';
+  unknownFields: string[];
+}
 export interface AvatarProfile {
   version: 1;
   species: 'cat' | 'dog';
@@ -18,6 +25,8 @@ export interface AvatarProfile {
   generatedAt: string;
   model?: string | null;
   verification?: string;
+  modelPresetId?: string;
+  traits?: PetVisualTraits;
 }
 export interface RecognitionResult {
   petId: string;

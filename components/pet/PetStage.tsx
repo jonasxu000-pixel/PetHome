@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { ActionLayer } from './ActionLayer';
-import { PetAvatarSvg } from './PetAvatarSvg';
+import { PetModel3D } from './PetModel3D';
+import { getPetModel } from '@/lib/pet3d/catalog';
 import type {
   InteractionOverlay,
   Pet,
@@ -14,6 +15,7 @@ export interface PetStageProps {
   realityState: RealityState;
   overlay: InteractionOverlay | null;
   displayAnimation?: string;
+  nightMode?: boolean;
   onSetOverlay: (overlay: InteractionOverlay) => void;
 }
 
@@ -71,6 +73,7 @@ export function PetStage({
   realityState,
   overlay,
   displayAnimation,
+  nightMode = false,
   onSetOverlay,
 }: PetStageProps) {
   const animClass = getStageAnimationClass(
@@ -97,6 +100,7 @@ export function PetStage({
       className="absolute inset-0 w-full h-full z-10 pointer-events-none"
     >
       <ActionLayer
+        limitedFeedback={!Object.keys(getPetModel(pet?.avatar, pet?.type ?? 'cat')?.animations ?? {}).length}
         realityBehavior={realityState.behavior}
         overlay={overlay}
         onSetOverlay={onSetOverlay}
@@ -104,10 +108,6 @@ export function PetStage({
         {(bindPartPointerDown) => (
           <div className="relative flex flex-col items-center justify-end pointer-events-none">
             {/* 地毯接触阴影（紧贴 SVG 前爪 y=242 实际落点，即容器底部向上约 12.5%） */}
-            <div
-              aria-hidden="true"
-              className="absolute bottom-[11%] w-[196px] h-[28px] rounded-full bg-[#3A281A]/24 blur-[7px] pointer-events-none"
-            />
 
             {/* 熟睡浮动 Zzz 气泡 */}
             {isSleeping && (
@@ -135,14 +135,15 @@ export function PetStage({
 
             {/* 原生分层绘本角色画布：放大至场景宽约 80%（312px ~ 340px），外框透传点击避免挡住左右工具圆钮 */}
             <div
-              className={`relative w-[312px] h-[312px] sm:w-[340px] sm:h-[340px] flex items-center justify-center pointer-events-none ${animClass}`}
+              className="relative w-[312px] h-[312px] sm:w-[340px] sm:h-[340px] flex items-center justify-center pointer-events-none"
             >
-              <PetAvatarSvg
+              <PetModel3D
                 avatar={pet?.avatar}
                 fallbackType={pet?.type ?? 'cat'}
-                realityBehavior={realityState.behavior}
+                behavior={realityState.behavior}
                 displayAnimation={displayAnimation}
                 overlay={overlay}
+                nightMode={nightMode}
                 onPartPointerDown={bindPartPointerDown}
               />
             </div>

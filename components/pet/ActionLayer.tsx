@@ -24,16 +24,18 @@ export interface RippleItem {
 }
 
 export interface ActionLayerProps {
+  limitedFeedback?: boolean;
   realityBehavior: Behavior;
   overlay: InteractionOverlay | null;
   onSetOverlay: (overlay: InteractionOverlay) => void;
   children: (bindPartPointerDown: (
     part: PetRegion,
-    e: React.PointerEvent<SVGElement>
+    e: React.PointerEvent<Element>
   ) => void) => React.ReactNode;
 }
 
 export function ActionLayer({
+  limitedFeedback = false,
   realityBehavior,
   overlay,
   onSetOverlay,
@@ -81,12 +83,17 @@ export function ActionLayer({
 
     spawnRipple(customX ?? fallbackX, customY ?? fallbackY, isSleeping);
     const nextOverlay = createFeedbackOverlay(kind, realityBehavior, now);
+    if (limitedFeedback) nextOverlay.message = isSleeping
+      ? '它安静地休息着，轻轻回应了你'
+      : kind === 'tap_nose' ? '它轻轻晃了晃，回应你的招呼'
+        : kind === 'stroke' ? '它随着你的抚摸轻轻摇晃'
+          : '它轻轻动了动，回应了你的触摸';
     onSetOverlay(nextOverlay);
   };
 
   const handlePartPointerDown = (
     part: PetRegion,
-    e: React.PointerEvent<SVGElement>
+    e: React.PointerEvent<Element>
   ) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.stopPropagation();
@@ -181,13 +188,11 @@ export function ActionLayer({
               />
               <span>{overlay.message}</span>
             </div>
-          ) : (
+          ) : isSleeping ? (
             <span className="text-[11px] font-medium text-ink-700 bg-surface-0/82 backdrop-blur-sm px-3 py-0.5 rounded-pill border border-line-200/80 shadow-1 whitespace-nowrap">
-              {isSleeping
-                ? '熟睡中 · 轻触仅有轻微反应'
-                : '轻触头、鼻、背或长尾互动'}
+              熟睡中 · 轻触仅有轻微反应
             </span>
-          )}
+          ) : null}
         </div>
 
         {children(handlePartPointerDown)}
@@ -221,7 +226,7 @@ export function ActionLayer({
               disabled={isCoolingDown}
               onClick={() => triggerKind(item.kind)}
               aria-label={`${item.label}（${item.gestureHint}，快捷键 ${item.keyShortcut}）`}
-              className={`px-3.5 py-1.5 min-h-[36px] rounded-pill text-[12px] font-semibold whitespace-nowrap cursor-pointer transition-colors duration-150 ${
+              className={`px-3.5 py-1.5 min-h-[44px] rounded-pill text-[12px] font-semibold whitespace-nowrap cursor-pointer transition-colors duration-150 ${
                 isActive
                   ? 'bg-brand-500 text-white shadow-1'
                   : 'text-ink-900 hover:bg-brand-50'

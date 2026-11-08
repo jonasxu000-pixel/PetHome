@@ -9,7 +9,7 @@ import type {
   InteractionKind,
   InteractionOverlay,
 } from '@/lib/types';
-import { PetAvatarSvg } from './PetAvatarSvg';
+import { PetModel3D } from './PetModel3D';
 
 export interface PetAvatarProps {
   avatar: AvatarProfile;
@@ -40,12 +40,13 @@ export function PetAvatar({
 
   return (
     <div className="w-full h-full flex items-center justify-center">
-      <PetAvatarSvg
+      <PetModel3D
         avatar={avatar}
         fallbackType={avatar?.species ?? 'cat'}
-        realityBehavior={behavior}
+        behavior={behavior}
         overlay={overlay}
-        onPartPointerDown={interactive ? handlePartPointerDown : undefined}
+        interactive={interactive}
+        onInteract={onInteract}
       />
     </div>
   );

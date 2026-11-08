@@ -3,7 +3,7 @@ import { readJsonLimited,sameOrigin,jsonError } from '@/lib/server/http';
 import { signAvatar } from '@/lib/server/avatar-proof';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-export const maxDuration=30;
+export const maxDuration=60;
 const quota=new Map<string,{time:number;count:number}>();
 export async function POST(request:Request) {
   if(!sameOrigin(request))return Response.json({ok:false,error:{code:'FORBIDDEN',message:'请求来源不被允许。',retriable:false}},{status:403});

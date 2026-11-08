@@ -3,9 +3,9 @@ import { SiteHeader } from '@/components/world/SiteHeader';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: '宠伴 PetHome · 现实同步数字宠物小屋',
+  title: 'PetHome · 让远方的爱宠，在手机里陪伴你',
   description:
-    '基于本地视频抽帧与视觉大模型识别的诚实数字宠物陪伴世界。行为状态如实反映视频识别结果，不做医疗健康诊断。',
+    '上传真实宠物照片，AI识别外貌并匹配可互动的3D数字分身，为暂时无法陪伴爱宠的人提供温暖的数字陪伴。',
 };
 
 export const viewport: Viewport = {

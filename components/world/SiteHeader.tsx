@@ -56,12 +56,6 @@ export function SiteHeader() {
             小屋
           </Link>
           <Link
-            href="/records"
-            className="px-2.5 py-1.5 rounded-sm text-ink-700 hover:bg-surface-2 transition-colors duration-200 whitespace-nowrap cursor-pointer"
-          >
-            记录
-          </Link>
-          <Link
             href="/create"
             className="px-2.5 py-1.5 rounded-sm text-brand-600 hover:bg-brand-50 transition-colors duration-200 whitespace-nowrap cursor-pointer"
           >

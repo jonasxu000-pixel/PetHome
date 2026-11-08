@@ -36,10 +36,24 @@ export function CozyRoomScene({ nightMode, children }: CozyRoomSceneProps) {
             onError={() => setImgError(true)}
             className={`w-full h-full object-cover object-center transition-all duration-500 ${
               nightMode
-                ? 'brightness-[0.62] contrast-[1.06] saturate-[0.86]'
+                ? 'brightness-[0.56] contrast-[1.1] saturate-[0.8]'
                 : 'brightness-100'
             }`}
           />
+
+          {/* 窗户区域夜间专属冷蓝遮罩：原图窗外为白昼，整体调暗后窗口仍偏亮突兀，
+              单独压暗并叠冷色，使其读作"夜色窗外"而非"忘记关的白天" */}
+          {nightMode && (
+            <div
+              aria-hidden="true"
+              className="absolute left-0 top-[14%] w-[40%] h-[34%] transition-opacity duration-500"
+              style={{
+                background:
+                  'radial-gradient(ellipse 70% 65% at 38% 45%, rgba(23, 31, 64, 0.78) 0%, rgba(23, 31, 64, 0.42) 55%, rgba(23, 31, 64, 0) 80%)',
+                mixBlendMode: 'multiply',
+              }}
+            />
+          )}
 
           {/* 夜晚模式暖夜灯与深蓝氛围覆盖层 */}
           {nightMode && (

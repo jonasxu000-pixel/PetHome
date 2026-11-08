@@ -34,7 +34,7 @@ export function providerConfig() {
   const available={gemini:!!process.env.GEMINI_API_KEY,zhipu:!!process.env.ZHIPU_API_KEY};
   return {selected,available};
 }
-export async function runVision<T>(image:string,prompt:string,parse:(raw:string)=>T,signal?:AbortSignal):Promise<T&{model:string;provider:'gemini'|'zhipu';latencyMs:number}> {
+export async function runVision<T>(image:string,prompt:string,parse:(raw:string)=>T,signal?:AbortSignal,options?:{timeoutMs?:number;maxOutputTokens?:number}):Promise<T&{model:string;provider:'gemini'|'zhipu';latencyMs:number}> {
   const {selected,available}=providerConfig();
   // The default free-model route must never silently switch to a paid provider.
   // Gemini is used only when the user explicitly selects it.
@@ -48,14 +48,14 @@ export async function runVision<T>(image:string,prompt:string,parse:(raw:string)
     const started=Date.now();
     try {
       if(!takeVisionSlot())throw new ProviderError('RATE_LIMITED','本分钟的识别次数已用完，请稍后重试。',429);
-      const timeout=AbortSignal.timeout(timeoutMs);
+      const timeout=AbortSignal.timeout(options?.timeoutMs??timeoutMs);
       const requestSignal=signal?AbortSignal.any([signal,timeout]):timeout;
       const response=provider==='gemini' ? await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{
         method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':process.env.GEMINI_API_KEY!},signal:requestSignal,
-        body:JSON.stringify({contents:[{parts:[{text:prompt},{inlineData:{mimeType:'image/jpeg',data:image.split(',')[1]}}]}],generationConfig:{temperature:0,responseMimeType:'application/json',maxOutputTokens:512}})
+        body:JSON.stringify({contents:[{parts:[{text:prompt},{inlineData:{mimeType:'image/jpeg',data:image.split(',')[1]}}]}],generationConfig:{temperature:0,responseMimeType:'application/json',maxOutputTokens:options?.maxOutputTokens??512}})
       }) : await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions',{
         method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${process.env.ZHIPU_API_KEY!}`},signal:requestSignal,
-        body:JSON.stringify({model,...(thinking?{}:{thinking:{type:'disabled'}}),temperature:0,max_tokens:thinking?2048:512,messages:[{role:'user',content:[{type:'image_url',image_url:{url:image}},{type:'text',text:prompt}]}]})
+        body:JSON.stringify({model,...(thinking?{}:{thinking:{type:'disabled'}}),temperature:0,max_tokens:thinking?4096:(options?.maxOutputTokens??512),messages:[{role:'user',content:[{type:'image_url',image_url:{url:image}},{type:'text',text:prompt}]}]})
       });
       if(!response.ok) throw new ProviderError(response.status===429?'RATE_LIMITED':'AI_UNAVAILABLE',response.status===429?'免费模型当前繁忙，请稍后重试。':'模型服务暂不可用，请检查配置后重试。',response.status===429?429:503);
       const body=await response.json();
